@@ -276,7 +276,7 @@ DEFINE_DPM_HEAT_MASS(fe_oxidation, tp, Cp, hgas, hvap, cvap_surf, Z, dydt, dzdt)
 double delta_H_spec = delta_H / M_FEO; // J/kg
     
     // 1. FIX: Use dmFeO_dt instead of dmFe_dt for the correct heat release scaling
-    heat_change = -(dmFeO_dt * delta_H_spec); // J/s
+    heat_change = -(dmFe_dt * delta_H_spec); // J/s
     
     // 2. Calculate default temperature change rate (K/s)
     double Q_total_rate = heat_change + Q_conv;
