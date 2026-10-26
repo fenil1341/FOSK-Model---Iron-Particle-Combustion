@@ -1,4 +1,5 @@
 #include "udf.h"
+#include "sg_mem.h"
 #include "dpm_mem.h"
 #include "dpm_types.h"
 #include "math.h"
@@ -28,10 +29,20 @@
 #define T_IGN    300     // K //
 #define T_ref    300 //K
 
+#define SIGMA_SB 5.67e-8   // W/m2/K4
+#define EMISSIVITY 0.85    // Typical for oxidized iron particles
+
 //reference Enthalpie at reference Temperature = Intergral(cp*T_ref)
 double h_ref_o2 = 5686.0;
 double h_ref_Fe2O3 = 0.0;
 double h_ref_Fe = 0.0;
+
+
+// ---------- FOR MELTING ---------- //
+#define T_MELT_FE 1811.0     // K (Melting point of Iron)
+#define L_FUSION_FE 247000.0 // J/kg (Latent heat of fusion Fe)
+#define T_MELT_FEO 1642.0     // K (Melting point of Wustite)
+#define L_FUSION_FEO 430000.0 // J/kg (Latent heat of fusion FeO)
 
 double sensible_cp_deltaT(double A, double B, double C,
                            double D, double E,
@@ -238,23 +249,21 @@ DEFINE_DPM_HEAT_MASS(fe_oxidation, tp, Cp, hgas, hvap, cvap_surf, Z, dydt, dzdt)
     // ---------- Reaktionsenthalpie ---------- //
     //real Q_reac = dmFeO_dt * H_0_feo;
 
+
+
+
+
+
     // ---------- Partikel-Energie ---------- //
-
-
-
-
     double heat_change = 0.0;
-    double delta_H_FeO      =  sensible_cp_deltaT(45.8, 18.79, -5.95, 0.86, -0.081, Tp, T_ref);
-    double delta_H_Fe       =  sensible_cp_deltaT(24.0, 8.37, 0.0003, -0.00009, -0.000005, Tp, T_ref);
-    double delta_H_O2 = 1.0;
-    if (Tgas < 2000.0)
-    {
-        delta_H_O2       = sensible_cp_deltaT(30.032, 8.772, -3.98, 0.7883, -0.7415, Tgas, T_ref);
-    }
-    else
-    {
-        delta_H_O2       = sensible_cp_deltaT(20.911, 10.72, -2.020, 0.146, 9.2457, Tgas, T_ref);
+    double delta_H_FeO = sensible_cp_deltaT(45.8, 18.79, -5.95, 0.86, -0.081, Tp, T_ref);
+    double delta_H_Fe  = sensible_cp_deltaT(24.0, 8.37, 0.0003, -0.00009, -0.000005, Tp, T_ref);
+    double delta_H_O2  = 1.0;
 
+    if (Tgas < 2000.0) {
+        delta_H_O2 = sensible_cp_deltaT(30.032, 8.772, -3.98, 0.7883, -0.7415, Tgas, T_ref);
+    } else {
+        delta_H_O2 = sensible_cp_deltaT(20.911, 10.72, -2.020, 0.146, 9.2457, Tgas, T_ref);
     }
     //delta_H_Fe = 34.0 * (Tp - 300.0);
     //delta_H_FeO = 61.0 * (Tgas - 300.0);
@@ -264,24 +273,37 @@ DEFINE_DPM_HEAT_MASS(fe_oxidation, tp, Cp, hgas, hvap, cvap_surf, Z, dydt, dzdt)
     double delta_H = (H_0_feo + delta_H_FeO) - (0.5 * delta_H_O2 + delta_H_Fe);
 
 
-    double delta_H_spec = delta_H/M_FEO; // J/kg
-    heat_change = -(dmFe_dt * delta_H_spec); // J/s
-    real reaction_heat = heat_change * delta_temp_p; // J
-    real dmFe = dmFe_dt * delta_temp_p;
-
-    //double heat_rate_particle = 1.0 * heat_change/dem_time_step;
-
-    double Da = koef_kin / (koef_diff + koef_kin); // Damkoehler Zahl -> 0: kin limitiert; 1: diff limitiert
-
-    //dydt[0] += (heat_change) / (mp * Cp);
+double delta_H_spec = delta_H / M_FEO; // J/kg
     
-    double delta_tp = (heat_change) / (mp * Cp); //K/s
-    double Q_conv_temp = (Q_conv) / (mp * Cp);
+    // 1. FIX: Use dmFeO_dt instead of dmFe_dt for the correct heat release scaling
+    heat_change = -(dmFeO_dt * delta_H_spec); // J/s
+    
+    // 2. Calculate default temperature change rate (K/s)
+    double Q_total_rate = heat_change + Q_conv;
+    dydt[0] += Q_total_rate / (mp * cp_p);
 
+// ---------- Phase Change (Melting) Logic - FeO ONLY ---------- //
+    real m_FeO_current = mp * (1.0 - YFe); // Current mass of FeO
+    real Q_step = Q_total_rate * delta_temp_p; // Total Joules this timestep
 
-
-
-    dydt[0] += delta_tp + Q_conv_temp;
+    // If we reach 1642 K and still have solid FeO left to melt
+    if (Tp >= T_MELT_FEO && TP_USER_REAL(tp, 0) < m_FeO_current) 
+    {
+        // Clamp temperature change to zero (Plateau)
+        dydt[0] = 0.0; 
+        
+        if (Q_step > 0) {
+            real dm_melt = Q_step / L_FUSION_FEO;
+            TP_USER_REAL(tp, 0) += dm_melt; // Track how much has melted
+            
+            // If we finish melting this exact timestep, apply the leftover heat
+            if (TP_USER_REAL(tp, 0) > m_FeO_current) {
+                real excess_Q = (TP_USER_REAL(tp, 0) - m_FeO_current) * L_FUSION_FEO;
+                TP_USER_REAL(tp, 0) = m_FeO_current; 
+                dydt[0] = (excess_Q / MAX(delta_temp_p, 1e-12)) / (mp * cp_p);
+            }
+        }
+    }
     
 
 
