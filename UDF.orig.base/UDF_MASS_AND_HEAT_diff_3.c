@@ -282,24 +282,39 @@ double delta_H_spec = delta_H / M_FEO; // J/kg
     double Q_total_rate = heat_change + Q_conv;
     dydt[0] += Q_total_rate / (mp * cp_p);
 
-// ---------- Phase Change (Melting) Logic - FeO ONLY ---------- //
-    real m_FeO_current = mp * (1.0 - YFe); // Current mass of FeO
-    real Q_step = Q_total_rate * delta_temp_p; // Total Joules this timestep
+// ---------- Phase Change (Melting) Logic ---------- //
+    real m_FeO_current = mp * (1.0 - YFe); 
+    real m_Fe_current  = mp * YFe; 
+    real Q_step = Q_total_rate * delta_temp_p;
 
-    // If we reach 1642 K and still have solid FeO left to melt
-    if (Tp >= T_MELT_FEO && TP_USER_REAL(tp, 0) < m_FeO_current) 
+    // --- 1. FeO Phase Change (1642 K) --- //
+    if (Tp >= T_MELT_FEO && Tp < T_MELT_FE && TP_USER_REAL(tp, 0) < m_FeO_current) 
     {
-        // Clamp temperature change to zero (Plateau)
         dydt[0] = 0.0; 
         
         if (Q_step > 0) {
             real dm_melt = Q_step / L_FUSION_FEO;
-            TP_USER_REAL(tp, 0) += dm_melt; // Track how much has melted
+            TP_USER_REAL(tp, 0) += dm_melt;
             
-            // If we finish melting this exact timestep, apply the leftover heat
             if (TP_USER_REAL(tp, 0) > m_FeO_current) {
                 real excess_Q = (TP_USER_REAL(tp, 0) - m_FeO_current) * L_FUSION_FEO;
-                TP_USER_REAL(tp, 0) = m_FeO_current; 
+                TP_USER_REAL(tp, 0) = m_FeO_current;
+                dydt[0] = (excess_Q / MAX(delta_temp_p, 1e-12)) / (mp * cp_p);
+            }
+        }
+    }
+    // --- 2. Fe Phase Change (1811 K) --- //
+    else if (Tp >= T_MELT_FE && TP_USER_REAL(tp, 1) < m_Fe_current) 
+    {
+        dydt[0] = 0.0; 
+        
+        if (Q_step > 0) {
+            real dm_melt = Q_step / L_FUSION_FE;
+            TP_USER_REAL(tp, 1) += dm_melt;
+            
+            if (TP_USER_REAL(tp, 1) > m_Fe_current) {
+                real excess_Q = (TP_USER_REAL(tp, 1) - m_Fe_current) * L_FUSION_FE;
+                TP_USER_REAL(tp, 1) = m_Fe_current;
                 dydt[0] = (excess_Q / MAX(delta_temp_p, 1e-12)) / (mp * cp_p);
             }
         }
